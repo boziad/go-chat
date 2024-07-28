@@ -3,6 +3,12 @@ package main
 import (
 	"fmt"
 	"net"
+	"sync"
+)
+
+var (
+	connections = make(map[net.Conn]bool)
+	mutex       sync.Mutex
 )
 
 func main() {
@@ -21,12 +27,21 @@ func main() {
 			fmt.Println("Error:", err)
 			continue
 		}
+		mutex.Lock()
+		connections[conn] = true
+		mutex.Unlock()
 		fmt.Println("New client connected")
 		go handleClient(conn)
 	}
 }
+
 func handleClient(conn net.Conn) {
-	defer conn.Close()
+	defer func() {
+		mutex.Lock()
+		delete(connections, conn)
+		mutex.Unlock()
+		conn.Close()
+	}()
 
 	buffer := make([]byte, 1024)
 
@@ -36,13 +51,23 @@ func handleClient(conn net.Conn) {
 			fmt.Println("Error:", err)
 			return
 		}
+		message := buffer[:n]
+		fmt.Printf("Received: %s\n", message)
+		broadcastMessage(message, conn)
+	}
+}
 
-		fmt.Printf("Received: %s\n", buffer[:n])
-
-		_, err = conn.Write(buffer[:n])
-		if err != nil {
-			fmt.Println("Error:", err)
-			return
+func broadcastMessage(message []byte, sender net.Conn) {
+	mutex.Lock()
+	defer mutex.Unlock()
+	for conn := range connections {
+		if conn != sender {
+			_, err := conn.Write(message)
+			if err != nil {
+				fmt.Println("Error sending message:", err)
+				conn.Close()
+				delete(connections, conn)
+			}
 		}
 	}
 }
